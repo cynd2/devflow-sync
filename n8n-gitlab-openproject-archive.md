@@ -214,6 +214,9 @@ Keep the transition tables in one place per type so they are easy to change.
 
 A Code node builds a readable message (missing ID, project not allowed, API error) and an HTTP Request node posts it to your chat webhook URL. Keep the webhook URL in a credential or environment variable, not in the exported workflow.
 
+---
+
+
 ## 5. Optional: merge request duration
 
 Working days from the merge request's creation date to today, weekends skipped:
@@ -236,6 +239,8 @@ function countWorkingDays(startDate, endDate) {
 
 Limits: no public holiday list, and `created_at` is used because the webhook only carries the last commit.
 
+---
+
 ## 6. Credentials
 
 Create credentials in n8n. Do not paste tokens into nodes or commit them.
@@ -247,6 +252,8 @@ Create credentials in n8n. Do not paste tokens into nodes or commit them.
 
 Apply the OpenProject credential to every HTTP Request node that calls OpenProject.
 
+---
+
 ## 7. Testing checklist
 
 - [ ] Webhook receives a real event (test URL, Listen first)
@@ -257,6 +264,8 @@ Apply the OpenProject credential to every HTTP Request node that calls OpenProje
 - [ ] The error alert arrives and contains no secrets
 - [ ] Activate the workflow and switch the webhook to the production URL
 
+---
+
 ## 8. Common problems
 
 | Symptom | Cause and fix |
@@ -266,6 +275,8 @@ Apply the OpenProject credential to every HTTP Request node that calls OpenProje
 | IF node always false | Wrong operator or no ID in the data. Check the Extract node output first. |
 | Extract returns no ID on GitHub data | The code reads GitLab fields. See section 8. |
 | PATCH rejected | Missing `lockVersion` or an invalid status ID. |
+
+---
 
 ## 9. Testing with GitHub instead of GitLab
 
@@ -282,6 +293,8 @@ If your test repository is on GitHub, the payload fields differ:
 | Repository path | `project.path_with_namespace` | `repository.full_name` |
 
 Set the webhook content type to `application/json`, and branch your Extract node on whichever header is present.
+
+---
 
 ## 10. Next steps
 

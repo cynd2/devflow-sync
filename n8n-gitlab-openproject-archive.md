@@ -309,9 +309,3 @@ Limits: no public holiday list; start day is counted inclusively; `created_at` i
 - `n8n-workflow-explained.md`: node by node explanation of all 34 nodes.
 
 ---
-
-## 11. Context block to paste into a new chat
-
-> I am building my own n8n workflow, that integrates GitLab with OpenProject. Template flow: webhook, `Extract Gitlab Data` (code), `Validate Gitlab OPID` (IF, `{{ $json.opId }}` is not empty), then OpenProject API nodes, status transition handlers, PATCH, comment, Google Chat errors. A second flow syncs OpenProject updates to SQA Test Items. My n8n is `X.app.n8n.cloud`; my own test repo is on GitHub, so the template's GitLab header and payload logic does not match my data. I am a beginner in n8n and want each node explained concept first, then practical. I am at the point where the IF node returns false, and I need to adapt Extract to the GitHub payload. Next node after that is `Get OP Work Package`. I prefer structured answers, direct corrections, no em dashes, no emojis.
-
----

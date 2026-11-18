@@ -126,8 +126,7 @@ Naming convention: nodes prefixed `[UserSettings]` / `[User Settings]` / `[User 
 | 33 | `Build Test Items Patch Payload` | Code | Build create payload |
 | 34 | `[User Settings] Create Items Test` | HTTP POST | Create Test item in OP |
 
-### Documentation issues found in the guideline
-
+### Documentation 
 1. `[UserSettings]` prefix is written three ways: `[UserSettings]`, `[User Settings]`, `[User settings]`.
 2. Type column says "Nodos" for `No Operation` (stray Spanish word).
 3. `[User Settings] Validate Work Package Type (Repo and Type)` is used in setup Step 6 but missing from the node table.
@@ -136,107 +135,88 @@ Naming convention: nodes prefixed `[UserSettings]` / `[User Settings]` / `[User 
 
 ---
 
-## 4. Setup procedure for a new repository (from the guideline)
+## 4. Setup procedure for a new repository
 
-1. Duplicate the template workflow in n8n and rename it to the project.
-2. Open `[UserSettings] Gitlab Webhooks`, set the path (e.g. `integration-projectname`), copy the URL.
-3. GitLab: Settings, Webhooks, paste URL. Enable **Push**, **Comments**, **Merge request events**.
-4. OpenProject: create a dedicated integration account, add it to the project, generate an API token (Account Settings, Access Tokens).
-5. GitLab: Settings, Access Tokens. Role **Maintainer**, scopes `api` and `read_api` (Maintainer required).
-6. n8n credentials:
-   - Basic Auth: user `apikey`, password = OpenProject token
-   - GitLab API: server `https://gitlab.[name].com`, token = GitLab token
-7. Edit `[User Settings] Validate Work Package Type (Repo and Type)`: register the OpenProject project name and GitLab repo path.
-8. Google Chat: create a space webhook, put the URL in `[User Settings] Send Validation Error Notification`. Optional thread grouping: append `&messageReplyOption=REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD` to the URL, or remove the `thread` key from the JSON body for separate messages.
-9. OpenProject webhook (administrator only): Settings, API and Webhooks. Payload URL from n8n (e.g. `integrationop-projectname`), event Work Package **Updated**, selected projects only.
-10. In `[User settings] Validate OP Fields & Extract OP` set `const allowedOpenProject = { "your-projectname" };`
-11. Apply the Basic Auth credential to all 7 OpenProject HTTP nodes: Get OP Work Package, GET OP List Statuses, Get OP Parent Work Package, Update OP Work Package, Check Test Items, Create Items Test, Post OP Comment.
+### 4.1 Webhook node (built)
 
----
+1. Add a **Webhook** node, method POST.
+2. Set a clear path, for example `integration-yourproject`.
+3. While building, use the **test URL** and click **Listen for test event**. Switch to the production URL only when the workflow is activated.
+4. In GitLab: *Settings → Webhooks*, paste the URL and tick **Push events**, **Comments** and **Merge request events**.
 
-## 5. Technical decisions and lessons
+Test: trigger an event (push a branch). If n8n shows no output, the event fired before n8n was listening. Click Listen first, then use **Redeliver** in the sender's recent deliveries.
 
-| Decision | Reason |
-|---|---|
-| Use an **IF** node (not Filter) for OPID validation | Filter silently drops non-matching items, so failures never reach the error path. IF gives explicit true and false outputs. |
-| Condition is `{{ $json.opId }}` with operator **is not empty** | Operator must be chosen from the dropdown. Typing "is not empty" into the second field compares against that literal text. |
-| Use `webhook-test` URL while building, `webhook` URL in production | Test URL only listens after clicking **Listen for test event**; Production URL needs the workflow **activated**. |
-| Test with pinned data | Pin a captured payload on the previous node so downstream nodes can be executed repeatedly without re-triggering the webhook. |
-| Duration measured from MR `created_at` (Option A) | The MR webhook only carries the **last** commit, not the first. A true first commit date needs an extra GitLab API call (Option B, not built). |
-| Duration counts weekdays only | Team uses a 5 day work week. Public holidays are not excluded yet. |
+### 4.2 Extract Data (built)
 
-**Webhook troubleshooting learned**
-- "No trigger output": GitHub or GitLab fired before n8n was listening. Click Listen first, then use **Redeliver** from Recent Deliveries.
-- GitHub delivery returned **404**: the test URL was hit while n8n was not listening. The request URL was correct (`.../webhook-test/a5a6a494-2385-4e93-9bd1-b9d4247f315c`).
-- GitHub content type must be `application/json`.
+A **Code** node that reads the incoming item and branches on the `x-gitlab-event` header (`Push Hook`, `Merge Request Hook`, `Note Hook`, `Job Hook`). For each event it returns a flat object: the work package ID, event name, project, author, title, source and target branch, state and action.
 
-**GitHub versus GitLab payload mapping (needed for the own build)**
-
-| Item | GitLab | GitHub |
-|---|---|---|
-| Event header | `x-gitlab-event` | `x-github-event` |
-| PR or MR object | `body.object_attributes` | `body.pull_request` |
-| Source branch | `object_attributes.source_branch` | `pull_request.head.ref` |
-| Title | `object_attributes.title` | `pull_request.title` |
-| Action | `object_attributes.action` | `body.action` |
-| Draft | `object_attributes.draft` | `pull_request.draft` |
-| Author | `user.name` | `pull_request.user.login` |
-| Repo path | `project.path_with_namespace` | `repository.full_name` |
-
----
-
-## 6. Code: `Extract Gitlab Data` (template) and fixes
-
-### 6.1 How the template works
-
-Code node reading `$input.first().json`. Shared setup extracts `headers`, `body`, `oa = body.object_attributes`, `project`, `user`. It then branches on `headers['x-gitlab-event']`:
-
-- `Push Hook`: branch from `body.ref`, commits, `before`/`after` SHA, author from top level `body.user_name`
-- `Merge Request Hook`: title, description, source and target branch, state, action, draft, conflicts, assignees, reviewers, dates, author from `body.user`
-- `Note Hook`: note text, MR from `body.merge_request`, OPID from source branch
-- `Job Hook`: build status, failure reason, runner type
-- anything else: returns `{ text: 'Events trigger : <url|event> not allowed for automation' }`
-
-OPID extractor (finalized, kept as is):
+The ID extractor:
 
 ```javascript
-function extractOpId(text){
-  if(!text) return null;
+function extractOpId(text) {
+  if (!text) return null;
   const match = text.match(/OP[- _#]?(\d+)/i);
   return match ? match[1] : null;
 }
-// MR hook searches title + description + source branch together
-const titleText = `${title} ${description} ${sourceBranch}`;
-opId = extractOpId(titleText);
 ```
 
-Return shape for MR events (what downstream nodes read): `opId, glEvent, eventName, mrIid, projectId, projectName, projectPath, projectUrl, authorName, authorEmail, authorAvatar, authorFirstName, authorLastName, assigneesName, reviewersName, title, eventUrl, createDate, updateDate, isDraft, isConflict, sourceBranch, targetBranch, targetUrl, state, action, branchType, branchTitle, nameLastCommit, emailLastCommit, description`.
+For merge request events, search the title, description and source branch together. For push events, search the branch name and commit messages.
 
-### 6.2 Issues found in the template and proposed fixes
+Things to guard against:
 
-| # | Issue | Fix |
-|---|---|---|
-| 1 | `branchTitle` uses `split("_")[1]`, breaks when branch has no underscore | see snippet below |
-| 2 | `sourceBranch.web_url` is read from a string, always `undefined` (dead code) | delete it |
-| 3 | `authorName.split(' ')` crashes when name is null | `const [authorFirstName = null, authorLastName = null] = (authorName ?? "").split(' ');` |
-| 4 | OPID regex is broad but intentional | keep |
-| 5 | Job Hook returns no `opId` or author; typo `runnerTyoe` | rename to `runnerType`, add fields if needed |
-| 6 | Push Hook variable `commitId` is actually an OPID | rename `commitOpId` |
+- Null author names: `const [first = null, last = null] = (authorName ?? "").split(" ");`
+- Branches with no underscore: do not index a `split("_")` result without checking it.
+- Unknown events: return a clear "event not allowed" result instead of crashing.
 
-```javascript
-// Safer branchTitle
-branchTitle = sourceBranch
-  ?.replace(/^[^/]+\//, "")          // drop "feature/"
-  ?.replace(/OP[-_]?\d+[-_]?/i, "")  // drop OPID
-  ?.replace(/[-_]/g, " ")            // separators to spaces
-  ?.trim() ?? null;
-```
+Test: pin a captured payload on the webhook node, then run only this node as many times as you like.
 
-Also noted as unused in the Push branch: `commitTitles`, `commitsLatest`. These fixes were proposed but a full corrected version of the node was **not** produced yet.
+### 4.3 Validate ID (built)
 
-### 6.3 Working day duration (finalized, Merge Request branch)
+Use an **IF** node, not a Filter node.
 
-Goal: working days from MR `created_at` to today, weekends skipped.
+- Filter silently drops items that do not match, so the failure never reaches your error path.
+- IF gives an explicit true and false output.
+
+Condition: value `{{ $json.opId }}`, operator **is not empty**. Choose the operator from the dropdown. Typing "is not empty" into the value field compares against that literal text and always fails.
+
+The false output goes to the error path (step 15).
+
+### 4.4 Get Work Package (planned)
+
+HTTP Request, GET `/api/v3/work_packages/{opId}`. Auth: Basic Auth, user `apikey`, password = your OpenProject token. The response gives the current status, type and project.
+
+### 4.5 List Statuses (planned)
+
+HTTP Request, GET `/api/v3/statuses`. You need this to turn a status name like "In progress" into the ID the PATCH call requires.
+
+### 4.6 Validate Project (planned)
+
+A Code node holding an allowlist of project names. If the work package's project is not on the list, stop and alert. This protects projects that did not opt in.
+
+### 4.7 Routing, classification and transitions (planned)
+
+- A **Switch** node on the event type sends push, merge request and comment events down separate branches.
+- Push: classify as branch created, deleted or normal push. Only a newly created branch starts work.
+- Merge request: set flags for new, draft, opened, approved, merged, closed and reopened.
+- A second **Switch** on work package type lets Task, User Story and Issue use different transition tables.
+- Each transition handler is a Code node that maps (current status, event) to the next status.
+
+Keep the transition tables in one place per type so they are easy to change.
+
+### 4.8 Apply the update (planned)
+
+1. **Build Patch Payload:** the new status ID and the work package `lockVersion` (OpenProject rejects updates without it).
+2. **Validate Changed Status:** an IF node that skips the PATCH when the status is the same.
+3. **PATCH** the work package.
+4. **Build and post a comment** such as "Status updated to In Progress, triggered by merge request opened on branch feature/OP-123_example".
+
+### 4.9 Error path (planned)
+
+A Code node builds a readable message (missing ID, project not allowed, API error) and an HTTP Request node posts it to your chat webhook URL. Keep the webhook URL in a credential or environment variable, not in the exported workflow.
+
+## 5. Optional: merge request duration
+
+Working days from the merge request's creation date to today, weekends skipped:
 
 ```javascript
 function countWorkingDays(startDate, endDate) {
@@ -246,66 +226,67 @@ function countWorkingDays(startDate, endDate) {
   const end = new Date(endDate);
   end.setHours(0, 0, 0, 0);
   while (current <= end) {
-    const d = current.getDay();      // 0 = Sun, 6 = Sat
+    const d = current.getDay();          // 0 = Sun, 6 = Sat
     if (d !== 0 && d !== 6) count++;
     current.setDate(current.getDate() + 1);
   }
   return count;
 }
-
-const mrStartDate = new Date(createdMR);
-const workingDays = countWorkingDays(mrStartDate, new Date());
-const durationLabel = workingDays === 0 ? "Created today"
-  : workingDays === 1 ? "1 working day"
-  : `${workingDays} working days`;
-// add workingDays and durationLabel to the returned json
 ```
 
-Limits: no public holiday list; start day is counted inclusively; `created_at` is used instead of the true first commit date.
+Limits: no public holiday list, and `created_at` is used because the webhook only carries the last commit.
 
----
+## 6. Credentials
 
-## 7. Real payload reference (MR event captured from GitLab)
+Create credentials in n8n. Do not paste tokens into nodes or commit them.
 
-- Header: `x-gitlab-event: Merge Request Hook`, `object_kind: merge_request`
-- Project: id `1380`, name `Git Training`, path `Software/git-training`
-- MR: iid `45`, title `Draft: [Feat][OP-141973] adding information`, source `feature/OP-141973_adding-information`, target `main`, `state: opened`, `action: update`, `draft: true`
-- Last commit message `Update gitlabapi` (no OPID, which is fine because title and branch carry it)
-- MR description already contains `https://openproject.[name].com/projects/test-project/work_packages/141973/activity`
-- Expected extraction: `opId = "141973"`
+| Credential | Setup |
+|---|---|
+| OpenProject (Basic Auth) | User `apikey`, password = the OpenProject API token. Create a dedicated integration account, add it to the project, then *Account settings → Access tokens*. |
+| GitLab API | A project or personal access token with `api` and `read_api` scopes. Setting one up needs the Maintainer role. |
 
----
+Apply the OpenProject credential to every HTTP Request node that calls OpenProject.
 
-## 8. Current build state
+## 7. Testing checklist
 
-**Done (own workflow)**
-- Webhook node receiving events (first real payload captured via redeliver)
-- `Extract Gitlab Data` code reviewed and understood
-- `Validate Gitlab OPID` IF node built with correct operator
-- Working day duration code written
+- [ ] Webhook receives a real event (test URL, Listen first)
+- [ ] Extract Data returns the right ID for a branch, a merge request title and a commit message
+- [ ] A branch with no ID goes down the false path
+- [ ] Pinned data lets you re-run later nodes without re-triggering
+- [ ] The status PATCH changes the status once and does not repeat when unchanged
+- [ ] The error alert arrives and contains no secrets
+- [ ] Activate the workflow and switch the webhook to the production URL
 
-**Not started**
-- `Get OP Work Package` and everything after it in Flow A
-- All of Flow B
-- Credentials, Google Chat webhook, project allowlists
+## 8. Common problems
 
----
+| Symptom | Cause and fix |
+|---|---|
+| "No trigger output" | The sender fired before n8n was listening. Click Listen, then Redeliver. |
+| 404 from the sender | The test URL was called while n8n was not listening. |
+| IF node always false | Wrong operator or no ID in the data. Check the Extract node output first. |
+| Extract returns no ID on GitHub data | The code reads GitLab fields. See section 8. |
+| PATCH rejected | Missing `lockVersion` or an invalid status ID. |
 
-## 9. Open tasks and next steps
+## 9. Testing with GitHub instead of GitLab
 
-1. **Resolve the IF node returning false.** The question of what `opId` and `glEvent` show in the `Extract Gitlab Data` output was never answered. Likely cause (inference, not confirmed): the own build receives **GitHub** payloads, which have no `x-gitlab-event` header, so `glEvent` is `null`, the code falls into the final `else` branch, and no `opId` is returned. Fix by either adapting the extractor to GitHub fields (section 5 table) or testing with a real GitLab payload.
-2. Decide the strategy: keep GitHub for the own build (rewrite Extract node, header check `x-github-event`, `pull_request` fields) or point to a GitLab repo to match the template exactly.
-3. Produce a corrected full `Extract Gitlab Data` node with fixes 1, 2, 3, 5, 6 applied.
-4. Build `Get OP Work Package` (HTTP GET, Basic Auth `apikey` plus token), then `GET OP List Statuses`.
-5. Build the error path: `Prepare Validation Error Message` and Google Chat notification.
-6. Continue down Flow A: project validation, event routing, transition handlers, PATCH, comment.
-7. Optional: replace `created_at` with true first commit date via `GET /api/v4/projects/:id/merge_requests/:iid/commits` (last item of the array). Optional: add public holiday exclusion.
-8. Fix the guideline inconsistencies listed in section 3.
-9. Test end to end with pinned data, then activate the workflow and switch the webhook to the production URL.
+If your test repository is on GitHub, the payload fields differ:
 
----
+| Item | GitLab | GitHub |
+|---|---|---|
+| Event header | `x-gitlab-event` | `x-github-event` |
+| PR / MR object | `body.object_attributes` | `body.pull_request` |
+| Source branch | `object_attributes.source_branch` | `pull_request.head.ref` |
+| Title | `object_attributes.title` | `pull_request.title` |
+| Action | `object_attributes.action` | `body.action` |
+| Draft | `object_attributes.draft` | `pull_request.draft` |
+| Repository path | `project.path_with_namespace` | `repository.full_name` |
 
-## 10. Deliverables already produced
-- `n8n-workflow-explained.md`: node by node explanation of all 34 nodes.
+Set the webhook content type to `application/json`, and branch your Extract node on whichever header is present.
 
----
+## 10. Next steps
+
+1. Adapt Extract Data to GitHub payloads (or test with a real GitLab event).
+2. Build steps 4 to 6, then the routing and transitions.
+3. Add the error alerts.
+4. Optional: replace `created_at` with the true first-commit date through the GitLab API, and exclude public holidays from the duration.
+5. Optional: sync finished development items to QA test items through an OpenProject webhook.
